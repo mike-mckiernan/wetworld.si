@@ -342,7 +342,7 @@ function frame() {
   sphere.rotation.x += ((-tilt.y * 0.25) - sphere.rotation.x) * Math.min(1, dt * 2);
   camera.position.x += (tilt.x * 0.35 - camera.position.x) * Math.min(1, dt * 2);
   camera.position.y += (tilt.y * 0.25 - camera.position.y) * Math.min(1, dt * 2);
-  camera.lookAt(0, 0, 0);
+  camera.lookAt(0, -0.15, 0); // aim a touch low so the sphere sits slightly above centre, balancing the quote
   camera.updateMatrixWorld();
   uniforms.uSunView.value.copy(key.position).normalize().transformDirection(camera.matrixWorldInverse);
 
