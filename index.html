@@ -40,7 +40,6 @@
 
 <script type="module">
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const canvas = document.getElementById('scene');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -71,11 +70,20 @@ function makePoolTexture() {
   g.fillStyle = grad;
   g.fillRect(0, 0, c.width, c.height);
 
-  // soft sunlight patch behind the sphere so the water reads as clear
-  const sun = g.createRadialGradient(c.width * 0.75, c.height * 0.42, 0, c.width * 0.75, c.height * 0.42, c.height * 0.45);
-  sun.addColorStop(0, 'rgba(225, 248, 255, 0.5)');
-  sun.addColorStop(1, 'rgba(225, 248, 255, 0)');
-  g.fillStyle = sun;
+  // warm sun glow, high and to the right, washing across the sky
+  const sx = c.width * 0.728, sy = c.height * 0.4;
+  const glow = g.createRadialGradient(sx, sy, 0, sx, sy, c.height * 0.4);
+  glow.addColorStop(0, 'rgba(255, 244, 214, 0.75)');
+  glow.addColorStop(0.35, 'rgba(255, 236, 200, 0.25)');
+  glow.addColorStop(1, 'rgba(255, 236, 200, 0)');
+  g.fillStyle = glow;
+  g.fillRect(0, 0, c.width, c.height);
+
+  // bright sun core
+  const core = g.createRadialGradient(sx, sy, 0, sx, sy, c.height * 0.035);
+  core.addColorStop(0, 'rgba(255, 253, 240, 1)');
+  core.addColorStop(1, 'rgba(255, 250, 230, 0)');
+  g.fillStyle = core;
   g.fillRect(0, 0, c.width, c.height);
 
   const tex = new THREE.CanvasTexture(c);
@@ -93,14 +101,19 @@ scene.add(backdrop);
 
 // Reflections
 const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+// reflect the sunny sky itself so highlights sit on the sun's side
+poolTexture.mapping = THREE.EquirectangularReflectionMapping;
+scene.environment = pmrem.fromEquirectangular(poolTexture).texture;
+poolTexture.mapping = THREE.UVMapping;
 
 // ---------- Lights ----------
-const key = new THREE.DirectionalLight(0xffffff, 2.2);
-key.position.set(3, 4, 5);
+// warm sun from high up and to the right, soft sky fill, cool bounce from below
+const key = new THREE.DirectionalLight(0xfff0d2, 5.5);
+key.position.set(4, 4.5, 2.5);
 scene.add(key);
-const rim = new THREE.DirectionalLight(0x7fe3f0, 1.4);
-rim.position.set(-4, -2, -3);
+scene.add(new THREE.HemisphereLight(0xeaf8ff, 0x4aa9db, 0.7));
+const rim = new THREE.DirectionalLight(0x9fe6f5, 0.9);
+rim.position.set(-4, -3, -3);
 scene.add(rim);
 
 // ---------- Water sphere ----------
@@ -112,12 +125,13 @@ const uniforms = {
   uRipples: { value: Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector4(0, 0, 1, -100)) },
   uStrength: { value: new Array(MAX_RIPPLES).fill(0) },
   uWobble: { value: reduceMotion ? 0.3 : 1.0 },
+  uSunView: { value: new THREE.Vector3() }, // sun direction in view space
 };
 
 const material = new THREE.MeshPhysicalMaterial({
   color: 0xe8fbff,
   metalness: 0,
-  roughness: 0.03,
+  roughness: 0.06,
   transmission: 1,
   thickness: 1.0,
   ior: 1.333,
@@ -126,7 +140,7 @@ const material = new THREE.MeshPhysicalMaterial({
   clearcoat: 0.6,
   clearcoatRoughness: 0.02,
   specularIntensity: 1,
-  envMapIntensity: 0.6,
+  envMapIntensity: 1.0,
 });
 
 material.onBeforeCompile = (shader) => {
@@ -191,6 +205,21 @@ material.onBeforeCompile = (shader) => {
     `)
     .replace('#include <begin_vertex>', /* glsl */`
       vec3 transformed = p0;
+    `);
+
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', /* glsl */`
+      #include <common>
+      uniform vec3 uSunView;
+    `)
+    .replace('#include <emissivemap_fragment>', /* glsl */`
+      #include <emissivemap_fragment>
+      // sunlight focused through the water onto the far side (caustic)
+      vec3 causticDir = normalize(vec3(-uSunView.xy, 0.9));
+      float caustic = pow(max(dot(normal, causticDir), 0.0), 10.0);
+      // warm glow where the sun grazes the near edge
+      float rimSun = pow(1.0 - max(normal.z, 0.0), 2.0) * max(dot(normalize(normal.xy + 1e-4), normalize(uSunView.xy)), 0.0);
+      totalEmissiveRadiance += vec3(1.0, 0.92, 0.72) * (caustic * 1.3 + rimSun * 0.9);
     `);
 };
 
@@ -281,6 +310,8 @@ function frame() {
   camera.position.x += (tilt.x * 0.35 - camera.position.x) * Math.min(1, dt * 2);
   camera.position.y += (tilt.y * 0.25 - camera.position.y) * Math.min(1, dt * 2);
   camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld();
+  uniforms.uSunView.value.copy(key.position).normalize().transformDirection(camera.matrixWorldInverse);
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
