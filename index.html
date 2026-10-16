@@ -1,43 +1,294 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hello, world</title>
-  <meta name="description" content="Coming soon.">
-  <style>
-    :root {
-      --bg: #f7f7f5;
-      --fg: #1a1a1a;
-      --muted: #6b6b6b;
-      --accent: #2f6feb;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root { --bg: #111213; --fg: #ececec; --muted: #9a9a9a; --accent: #6ea0ff; }
-    }
-    * { box-sizing: border-box; margin: 0; }
-    html, body { height: 100%; }
-    body {
-      background: var(--bg);
-      color: var(--fg);
-      font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      display: grid;
-      place-items: center;
-      padding: 16px;
-    }
-    main { text-align: center; max-width: 36rem; }
-    h1 { font-size: clamp(2.5rem, 8vw, 4.5rem); letter-spacing: -0.03em; line-height: 1.05; }
-    h1 span { color: var(--accent); }
-    p { margin-top: 1rem; color: var(--muted); font-size: 1.125rem; }
-    footer { position: fixed; bottom: 16px; left: 0; right: 0; text-align: center; color: var(--muted); font-size: 0.875rem; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Water Sphere</title>
 </head>
 <body>
-  <main>
-    <h1>Hello, <span>world</span>.</h1>
-    <p>Something new is on the way. Check back soon.</p>
-  </main>
-  <footer>&copy; <span id="y">2026</span></footer>
-  <script>document.getElementById('y').textContent = new Date().getFullYear();</script>
+<style>
+  /* Layout: the water sphere alone, centred on a full-bleed pool backdrop. No text. */
+  :root {
+    --bg: #04121c;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    overflow: hidden;
+  }
+  canvas#scene {
+    position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+    touch-action: none;
+    cursor: crosshair;
+  }
+</style>
+
+<canvas id="scene" aria-label="A sphere of water that ripples where your cursor touches it"></canvas>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const canvas = document.getElementById('scene');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Phones and small screens get a lighter mesh, fewer ripples and a lower render resolution
+const lowPower = matchMedia('(pointer: coarse)').matches || Math.min(innerWidth, innerHeight) < 600;
+
+// Without WebGL the page simply shows the background colour
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !lowPower, powerPreference: 'high-performance' });
+
+renderer.setPixelRatio(Math.min(devicePixelRatio, lowPower ? 1.5 : 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+camera.position.set(0, 0, 5.2);
+
+// ---------- Pool backdrop (gives the refraction something to bend) ----------
+function makePoolTexture() {
+  const c = document.createElement('canvas');
+  c.width = 1536; c.height = 768;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0, '#0d4a63');
+  grad.addColorStop(0.5, '#0a3346');
+  grad.addColorStop(1, '#03131d');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, c.width, c.height);
+
+  // soft sunlight patch behind the sphere so the water reads as clear
+  const sun = g.createRadialGradient(c.width * 0.75, c.height * 0.42, 0, c.width * 0.75, c.height * 0.42, c.height * 0.45);
+  sun.addColorStop(0, 'rgba(120, 220, 240, 0.45)');
+  sun.addColorStop(1, 'rgba(120, 220, 240, 0)');
+  g.fillStyle = sun;
+  g.fillRect(0, 0, c.width, c.height);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+const poolTexture = makePoolTexture();
+const backdrop = new THREE.Mesh(
+  new THREE.SphereGeometry(30, 64, 32),
+  new THREE.MeshBasicMaterial({ map: poolTexture, side: THREE.BackSide })
+);
+scene.add(backdrop);
+
+// Reflections
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+
+// ---------- Lights ----------
+const key = new THREE.DirectionalLight(0xffffff, 2.2);
+key.position.set(3, 4, 5);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x7fe3f0, 1.4);
+rim.position.set(-4, -2, -3);
+scene.add(rim);
+
+// ---------- Water sphere ----------
+const MAX_RIPPLES = lowPower ? 16 : 24;
+const uniforms = {
+  uTime: { value: 0 },
+  uHover: { value: new THREE.Vector3(0, 0, 1) },
+  uHoverAmt: { value: 0 },
+  uRipples: { value: Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector4(0, 0, 1, -100)) },
+  uStrength: { value: new Array(MAX_RIPPLES).fill(0) },
+  uWobble: { value: reduceMotion ? 0.3 : 1.0 },
+};
+
+const material = new THREE.MeshPhysicalMaterial({
+  color: 0xe8fbff,
+  metalness: 0,
+  roughness: 0.03,
+  transmission: 1,
+  thickness: 1.0,
+  ior: 1.333,
+  attenuationColor: new THREE.Color('#6fd8e8'),
+  attenuationDistance: 4.5,
+  clearcoat: 0.6,
+  clearcoatRoughness: 0.02,
+  specularIntensity: 1,
+  envMapIntensity: 0.6,
+});
+
+material.onBeforeCompile = (shader) => {
+  Object.assign(shader.uniforms, uniforms);
+
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', /* glsl */`
+      #include <common>
+      #define MAX_RIPPLES ${MAX_RIPPLES}
+      uniform float uTime;
+      uniform vec3  uHover;
+      uniform float uHoverAmt;
+      uniform vec4  uRipples[MAX_RIPPLES]; // xyz = impact direction, w = start time
+      uniform float uStrength[MAX_RIPPLES];
+      uniform float uWobble;
+
+      float arcDist(vec3 a, vec3 b) { return acos(clamp(dot(a, b), -1.0, 1.0)); }
+
+      float waterDisp(vec3 n) {
+        float t = uTime;
+        float d = 0.0;
+
+        // Idle surface tension wobble
+        d += uWobble * 0.018 * sin(n.x * 3.1 + t * 1.3) * sin(n.y * 3.7 + t * 1.1) * sin(n.z * 2.9 + t * 0.9);
+        d += uWobble * 0.008 * sin(dot(n, vec3(5.0, 7.0, -6.0)) + t * 2.1);
+
+        // Water lifts toward the cursor, with a shallow trough around the mound
+        float ha = arcDist(n, uHover);
+        d += uHoverAmt * (0.11 * exp(-ha * ha * 14.0) - 0.025 * exp(-pow(ha - 0.45, 2.0) * 30.0));
+
+        // Expanding rings from each impact
+        for (int i = 0; i < MAX_RIPPLES; i++) {
+          float age = t - uRipples[i].w;
+          if (age < 0.0 || age > 5.0) continue;
+          float a = arcDist(n, uRipples[i].xyz);
+          float front = age * 0.9;
+          float x = a - front;
+          float envelope = exp(-x * x * 18.0) * exp(-age * 0.9) / (1.0 + a * 2.0);
+          d += uStrength[i] * 0.07 * envelope * cos(x * 34.0);
+          // initial splash dip at the impact point
+          d -= uStrength[i] * 0.06 * exp(-a * a * 60.0) * exp(-age * 6.0);
+        }
+        return d;
+      }
+
+      vec3 displaced(vec3 n) { return n * (1.0 + waterDisp(n)); }
+    `)
+    .replace('#include <beginnormal_vertex>', /* glsl */`
+      vec3 baseN = normalize(position);
+      vec3 helper = abs(baseN.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+      vec3 tan1 = normalize(cross(helper, baseN));
+      vec3 tan2 = cross(baseN, tan1);
+      float eps = 0.006;
+      vec3 p0 = displaced(baseN);
+      vec3 p1 = displaced(normalize(baseN + tan1 * eps));
+      vec3 p2 = displaced(normalize(baseN + tan2 * eps));
+      vec3 objectNormal = normalize(cross(p1 - p0, p2 - p0));
+      if (dot(objectNormal, baseN) < 0.0) objectNormal = -objectNormal;
+      #ifdef USE_TANGENT
+        vec3 objectTangent = vec3(tangent.xyz);
+      #endif
+    `)
+    .replace('#include <begin_vertex>', /* glsl */`
+      vec3 transformed = p0;
+    `);
+};
+
+const sphere = new THREE.Mesh(new THREE.IcosahedronGeometry(1, lowPower ? 36 : 64), material);
+scene.add(sphere);
+
+// ---------- Interaction ----------
+const pointer = new THREE.Vector2();
+const raycaster = new THREE.Raycaster();
+const hitSphere = new THREE.Sphere(new THREE.Vector3(), 1.02);
+const hitPoint = new THREE.Vector3();
+const targetHover = new THREE.Vector3(0, 0, 1);
+const lastRippleDir = new THREE.Vector3();
+let hovering = false;
+let hasLast = false;
+let rippleIndex = 0;
+let hoverAmtTarget = 0;
+let tilt = new THREE.Vector2();
+const clock = new THREE.Clock();
+
+function localDirFromEvent(e) {
+  const rect = canvas.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  tilt.set(pointer.x, pointer.y);
+  raycaster.setFromCamera(pointer, camera);
+  if (!raycaster.ray.intersectSphere(hitSphere, hitPoint)) return null;
+  return sphere.worldToLocal(hitPoint.clone()).normalize();
+}
+
+function addRipple(dir, strength) {
+  const r = uniforms.uRipples.value[rippleIndex];
+  r.set(dir.x, dir.y, dir.z, uniforms.uTime.value);
+  uniforms.uStrength.value[rippleIndex] = strength;
+  rippleIndex = (rippleIndex + 1) % MAX_RIPPLES;
+}
+
+canvas.addEventListener('pointermove', (e) => {
+  const dir = localDirFromEvent(e);
+  if (!dir) { hovering = false; hasLast = false; return; }
+  hovering = true;
+  targetHover.copy(dir);
+  if (!hasLast) { lastRippleDir.copy(dir); hasLast = true; addRipple(dir, 0.6); return; }
+  const moved = dir.angleTo(lastRippleDir);
+  if (moved > 0.09) {
+    addRipple(dir, Math.min(1.1, 0.35 + moved * 3));
+    lastRippleDir.copy(dir);
+  }
+});
+
+canvas.addEventListener('pointerdown', (e) => {
+  const dir = localDirFromEvent(e);
+  if (!dir) return;
+  hovering = true;
+  targetHover.copy(dir);
+  addRipple(dir, 2.2);
+});
+
+canvas.addEventListener('pointerleave', () => { hovering = false; hasLast = false; });
+
+// ---------- Resize ----------
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  // keep the sphere comfortably framed on narrow screens
+  camera.position.z = w / h < 0.8 ? 7.4 : 5.2;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- Loop ----------
+const tmp = new THREE.Vector3();
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = (uniforms.uTime.value += dt);
+
+  hoverAmtTarget = hovering ? 1 : 0;
+  uniforms.uHoverAmt.value += (hoverAmtTarget - uniforms.uHoverAmt.value) * Math.min(1, dt * 6);
+  tmp.copy(uniforms.uHover.value).lerp(targetHover, Math.min(1, dt * 10)).normalize();
+  uniforms.uHover.value.copy(tmp);
+
+  // slow drift plus a gentle lean toward the cursor
+  const spin = reduceMotion ? 0.02 : 0.08;
+  sphere.rotation.y += dt * spin;
+  sphere.rotation.x += ((-tilt.y * 0.25) - sphere.rotation.x) * Math.min(1, dt * 2);
+  camera.position.x += (tilt.x * 0.35 - camera.position.x) * Math.min(1, dt * 2);
+  camera.position.y += (tilt.y * 0.25 - camera.position.y) * Math.min(1, dt * 2);
+  camera.lookAt(0, 0, 0);
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// a welcoming first drop so the page is alive at rest
+addRipple(new THREE.Vector3(0.3, 0.4, 0.86).normalize(), 1.4);
+requestAnimationFrame(frame);
+</script>
 </body>
 </html>
