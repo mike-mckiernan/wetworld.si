@@ -9,8 +9,8 @@
 <style>
   /* Layout: the water sphere alone, centred on a full-bleed pool backdrop. No text. */
   :root {
-    --bg: #04121c;
-    color-scheme: dark;
+    --bg: #8fd3f0;
+    color-scheme: light;
   }
   html, body { height: 100%; }
   body {
@@ -65,16 +65,16 @@ function makePoolTexture() {
   c.width = 1536; c.height = 768;
   const g = c.getContext('2d');
   const grad = g.createLinearGradient(0, 0, 0, c.height);
-  grad.addColorStop(0, '#0d4a63');
-  grad.addColorStop(0.5, '#0a3346');
-  grad.addColorStop(1, '#03131d');
+  grad.addColorStop(0, '#a6e0f7');
+  grad.addColorStop(0.5, '#6fc6ec');
+  grad.addColorStop(1, '#45a7da');
   g.fillStyle = grad;
   g.fillRect(0, 0, c.width, c.height);
 
   // soft sunlight patch behind the sphere so the water reads as clear
   const sun = g.createRadialGradient(c.width * 0.75, c.height * 0.42, 0, c.width * 0.75, c.height * 0.42, c.height * 0.45);
-  sun.addColorStop(0, 'rgba(120, 220, 240, 0.45)');
-  sun.addColorStop(1, 'rgba(120, 220, 240, 0)');
+  sun.addColorStop(0, 'rgba(225, 248, 255, 0.5)');
+  sun.addColorStop(1, 'rgba(225, 248, 255, 0)');
   g.fillStyle = sun;
   g.fillRect(0, 0, c.width, c.height);
 
